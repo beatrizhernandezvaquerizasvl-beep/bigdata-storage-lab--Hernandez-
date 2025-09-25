@@ -1,44 +1,66 @@
+# src/transform.py
 import pandas as pd
-from typing import Dict
 
-def normalize_columns(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
+def normalize_columns(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
     """
-    Renombra columnas, formatea fechas a ISO, limpia partner y normaliza amount.
-    mapping: dict con {columna_origen: columna_canónica}
+    Renombra columnas según mapping (origen→canónico).
+    Normaliza:
+      - date → datetime ISO
+      - amount → float (quita € y comas)
+      - partner → string sin espacios extremos
     """
-    # Renombrar según mapping
     df = df.rename(columns=mapping)
 
-    # Asegurar que columnas canónicas existen si estaban en mapping
+    # Fecha
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if "partner" in df.columns:
-        df["partner"] = df["partner"].astype(str).str.strip()
+
+    # Amount
     if "amount" in df.columns:
-        # Remover símbolo €, espacios y cambiar comas por puntos
         df["amount"] = (
             df["amount"]
             .astype(str)
             .str.replace("€", "", regex=False)
             .str.replace(",", ".", regex=False)
-            .str.strip()
         )
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+
+    # Partner
+    if "partner" in df.columns:
+        df["partner"] = df["partner"].astype(str).str.strip()
 
     return df
 
 
 def to_silver(bronze: pd.DataFrame) -> pd.DataFrame:
     """
-    Agrega montos por partner y mes.
-    Crea columna 'month' como primer día de cada mes (timestamp).
+    Agrega amount por partner y mes.
+    month = primer día del mes (timestamp).
     """
-    df = bronze.copy()
-    if "date" not in df.columns or "partner" not in df.columns or "amount" not in df.columns:
-        raise ValueError("Bronze debe contener columnas: date, partner, amount")
-
-    # Crear columna de mes
-    df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
-    silver = df.groupby(["partner", "month"], as_index=False)["amount"].sum()
-
+    bronze["month"] = bronze["date"].dt.to_period("M").dt.to_timestamp()
+    silver = (
+        bronze.groupby(["partner", "month"], as_index=False)
+        .agg(total_amount=("amount", "sum"))
+    )
     return silver
+
+
+def to_gold(silver: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agrega amount por partner y año.
+    Campos:
+      - year
+      - partner
+      - total_amount
+      - n_transactions
+    """
+    silver["year"] = silver["month"].dt.year
+    gold = (
+        silver.groupby(["partner", "year"], as_index=False)
+        .agg(
+            total_amount=("total_amount", "sum"),
+            n_transactions=("total_amount", "count"),
+        )
+    )
+    return gold
+
