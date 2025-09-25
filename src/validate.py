@@ -1,73 +1,51 @@
 # src/validate.py
-"""
-Módulo de validación de datos canónicos.
-Se espera que los DataFrames tengan las columnas estandarizadas:
-- date   : fecha de la transacción
-- partner: cliente/partner asociado
-- amount : importe numérico
-"""
-
 import pandas as pd
-import logging
-
-# Configuración básica de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-
 
 def basic_checks(df: pd.DataFrame) -> list[str]:
     """
-    Ejecuta validaciones mínimas sobre el DataFrame canónico.
+    Ejecuta validaciones sobre el dataframe canónico.
     Retorna una lista de mensajes de error (vacía si todo está OK).
+    Incluye:
+      - Columnas obligatorias
+      - Fechas válidas
+      - Rango de fechas (2010–2030)
+      - Amount >= 0
+      - Duplicados por clave natural (date + partner)
     """
     errors: list[str] = []
 
-    # --- 1. Columnas obligatorias ---
+    # Columnas obligatorias
     required_cols = ["date", "partner", "amount"]
     for col in required_cols:
         if col not in df.columns:
-            errors.append(f"❌ Falta la columna obligatoria: {col}")
+            errors.append(f"Falta la columna obligatoria: {col}")
+            return errors  # no seguimos si faltan columnas
 
-    # Si faltan columnas críticas, no seguir
-    if errors:
-        logging.error("Errores de columnas: %s", errors)
-        return errors
-
-    # --- 2. Fecha válida ---
-    invalid_dates = pd.to_datetime(df["date"], errors="coerce").isna().sum()
+    # Validación de fechas
+    parsed_dates = pd.to_datetime(df["date"], errors="coerce")
+    invalid_dates = parsed_dates.isna().sum()
     if invalid_dates > 0:
-        errors.append(f"❌ {invalid_dates} filas con fechas inválidas")
+        errors.append(f"{invalid_dates} filas con fechas inválidas")
 
-    # --- 3. Partner no nulo ---
-    null_partners = df["partner"].isna().sum()
-    if null_partners > 0:
-        errors.append(f"❌ {null_partners} filas con partner vacío")
+    # Rango de fechas permitido
+    mask_out_of_range = (parsed_dates < "2010-01-01") | (parsed_dates > "2030-12-31")
+    out_of_range_count = mask_out_of_range.sum()
+    if out_of_range_count > 0:
+        errors.append(f"{out_of_range_count} filas fuera del rango de fechas permitido (2010–2030)")
 
-    # --- 4. Amount válido ---
-    # numérico
+    # Validación de amount
     if not pd.api.types.is_numeric_dtype(df["amount"]):
-        errors.append("❌ La columna 'amount' no es numérica")
-
-    # sin negativos
-    invalid_amounts = df[df["amount"] < 0].shape[0]
-    if invalid_amounts > 0:
-        errors.append(f"❌ {invalid_amounts} filas con importe negativo")
-
-    # log
-    if errors:
-        logging.warning("Validaciones con errores: %s", errors)
+        errors.append("La columna amount no es numérica")
     else:
-        logging.info("Validaciones superadas correctamente ✅")
+        negative_amounts = (df["amount"] < 0).sum()
+        if negative_amounts > 0:
+            errors.append(f"{negative_amounts} filas con importe negativo")
+
+    # Duplicados por clave natural (date + partner)
+    if {"date", "partner"}.issubset(df.columns):
+        duplicates = df.duplicated(subset=["date", "partner"]).sum()
+        if duplicates > 0:
+            errors.append(f"{duplicates} filas duplicadas detectadas por clave natural (date + partner)")
 
     return errors
 
-
-def validation_summary(errors: list[str]) -> str:
-    """
-    Devuelve un string legible con el resultado de las validaciones.
-    """
-    if not errors:
-        return "✅ Todas las validaciones fueron superadas."
-    return "⚠️ Se encontraron los siguientes problemas:\n- " + "\n- ".join(errors)
